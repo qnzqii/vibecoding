@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 智能手势交互粒子系统</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            user-select: none;
+        }
+        /* 实时摄像头预览小窗 */
+        #webcam {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 200px;
+            height: 150px;
+            transform: scaleX(-1); /* 镜像翻转 */
+            border-radius: 12px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            z-index: 10;
+            object-fit: cover;
+            background: #111;
+        }
+        /* 全屏控制按钮 */
+        #fullscreen-btn {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 12px 24px;
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #fff;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            letter-spacing: 1px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 10;
+        }
+        #fullscreen-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: rgba(255, 255, 255, 0.4);
+            box-shadow: 0 0 20px rgba(255,255,255,0.15);
+        }
+        /* 现代化动态载入提示 */
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 1.1rem;
+            letter-spacing: 2px;
+            pointer-events: none;
+            transition: opacity 0.6s ease;
+            z-index: 100;
+            text-align: center;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255,255,255,0.1);
+            border-radius: 50%;
+            border-top-color: #00ffcc;
+            animation: spin 1s linear infinite; 
+            margin: 0 auto 15px auto;
+            cursor: pointer; 
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.18"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <div>人工智能视觉模型加载中...</div>
+    </div>
+    <button id="fullscreen-btn">全屏极客模式</button>
+    <video id="webcam" autoplay playsinline></video>
+
+    <script>
+        // --- 1. 全局三维场景配置 ---
+        let scene, camera, renderer, particleGeometry, particleMaterial, particleSystem;
+        let currentPositions = []; 
+        let currentActiveShape = '爱心'; 
+        const PARTICLE_COUNT = 6000; 
+        
+        // 实时面板参数映射
+        const params = {
+            model: '爱心',
+            color: '#00ffcc',
+            particleSize: 0.06,
+        };
+
+        const modelsData = {};
+
+        // --- 2. 几何点云生成 (包含纯字母组合的 I LOVE U 算法) ---
+        function generateShapes() {
+            // 2.1 拓扑爱心模型
+            const heart = [];
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                const t = Math.PI * 2 * (i / PARTICLE_COUNT);
+                const x = 16 * Math.pow(Math.sin(t), 3);
+                const y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+                const z = (Math.random() - 0.5) * 4; 
+                heart.push(x * 0.55, y * 0.55, z);
+            }
+            modelsData['爱心'] = heart;
+
+            // 2.2 花朵模型
+            const flower = [];
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                const phi = Math.acos((Math.random() * 2) - 1);
+                const theta = Math.random() * Math.PI * 2;
+                const k = 5; 
+                const r = 9 * Math.sin(k * theta);
+                const x = r * Math.sin(phi) * Math.cos(theta);
+                const y = r * Math.sin(phi) * Math.sin(theta);
+                const z = r * Math.cos(phi) * 0.15;
+                flower.push(x, y, z);
+            }
+            modelsData['花朵'] = flower;
+
+            // 2.3 土星模型
+            const saturn = [];
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                if (i < PARTICLE_COUNT * 0.35) { 
+                    const u = Math.random();
+                    const v = Math.random();
+                    const theta = u * 2.0 * Math.PI;
+                    const phi = Math.acos(2.0 * v - 1.0);
+                    const r = Math.cbrt(Math.random()) * 3.5; 
+                    saturn.push(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+                } else { 
+                    const theta = Math.random() * Math.PI * 2;
+                    const r = 5.5 + Math.random() * 5.5; 
+                    saturn.push(r * Math.cos(theta), (Math.random() - 0.5) * 0.4, r * Math.sin(theta));
+                }
+            }
+            modelsData['土星'] = saturn;
+
+            // 2.4 帽子模型
+            const hat = [];
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                let x, y, z;
+                if(i < PARTICLE_COUNT * 0.5) { 
+                    const theta = Math.random() * Math.PI * 2;
+                    const r = 4.5 + Math.random() * 4.5;
+                    x = r * Math.cos(theta);
+                    y = -2.5 + (Math.random() - 0.5) * 0.3;
+                    z = r * Math.sin(theta);
+                } else { 
+                    const theta = Math.random() * Math.PI * 2;
+                    const h = Math.random() * 5 - 2.5; 
+                    const r = (5 - h * 0.4) * (0.5 + Math.random()*0.5); 
+                    x = r * Math.cos(theta);
+                    y = h + 1;
+                    z = r * Math.sin(theta);
+                }
+                hat.push(x, y, z);
+            }
+            modelsData['帽子'] = hat;
+
+            // 2.5 烟花模型
+            const fireworks = [];
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos((Math.random() * 2) - 1);
+                const r = 1 + Math.pow(Math.random(), 2) * 11; 
+                fireworks.push(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+            }
+            modelsData['烟花'] = fireworks;
+            
+            // 2.6 【重构核心】：纯字母重组 “I Love U” 模型，实现严格的大小一致与“空一格”排版
+            const iloveu = [];
+            const perLetterCount = Math.floor(PARTICLE_COUNT / 6); 
+
+            for(let i=0; i<PARTICLE_COUNT; i++) {
+                const letterIndex = Math.floor(i / perLetterCount); 
+                let x = 0, y = 0, z = (Math.random() - 0.5) * 1.5; 
+                const u1 = Math.random();
+                const u2 = Math.random();
+
+                // 统一的字母位置排版矩阵 (带有完美的单词间空格隔离：I [空格] L O V E [空格] U)
+                // 各字母的横向中轴偏移量，预留了完美的间距
+                let xOffset = 0;
+                if (letterIndex === 0) xOffset = -20;                  // I
+                else if (letterIndex === 1) xOffset = -10;             // L (与 I 之间拉开10个单位，形成空格)
+                else if (letterIndex === 2) xOffset = -4.5;            // O
+                else if (letterIndex === 3) xOffset = 1;               // V
+                else if (letterIndex === 4) xOffset = 6.5;             // E
+                else if (letterIndex === 5) xOffset = 16.5;            // U (与 E 之间拉开10个单位，形成空格)
+
+                switch(letterIndex) {
+                    case 0: // 字母 "I" (高8，宽3)
+                        if (u1 < 0.6) { // 竖
+                            x = 0; y = u2 * 8 - 4;
+                        } else if (u1 < 0.8) { // 上横
+                            x = u2 * 3 - 1.5; y = 4;
+                        } else { // 下横
+                            x = u2 * 3 - 1.5; y = -4;
+                        }
+                        break;
+
+                    case 1: // 字母 "L" (高8，宽3.5)
+                        if (u1 < 0.65) { 
+                            x = -1.5; y = u2 * 8 - 4;
+                        } else { 
+                            x = -1.5 + u2 * 3.5; y = -4;
+                        }
+                        break;
+
+                    case 2: // 字母 "O" (高8，宽4.5)
+                        const thetaO = u1 * Math.PI * 2;
+                        x = Math.cos(thetaO) * 2.25;
+                        y = Math.sin(thetaO) * 4;
+                        break;
+
+                    case 3: // 字母 "V" (高8，宽4.5) -> 算法重构：彻底掐断交叉，阻止化为 X
+                        // y 轴范围限制在 -4 到 4
+                        y = u2 * 8 - 4; 
+                        if (u1 < 0.5) { // 左斜线：从左上 (-2.25, 4) 延伸到正下方 (0, -4)
+                            x = (y + 4) * (-2.25 / 8); 
+                        } else { // 右斜线：从右上 (2.25, 4) 延伸到正下方 (0, -4)
+                            x = (y + 4) * (2.25 / 8);
+                        }
+                        break;
+
+                    case 4: // 字母 "E" (高8，宽3.5)
+                        if (u1 < 0.4) { // 主立柱
+                            x = -1.5; y = u2 * 8 - 4;
+                        } else if (u1 < 0.6) { // 上长横
+                            x = -1.5 + u2 * 3.5; y = 4;
+                        } else if (u1 < 0.8) { // 中短横
+                            x = -1.5 + u2 * 2.5; y = 0;
+                        } else { // 下长横
+                            x = -1.5 + u2 * 3.5; y = -4;
+                        }
+                        break;
+
+                    case 5: // 字母 "U" (高8，宽4.5) -> 算法重构：等比例拉高，防止过小
+                        if (u1 < 0.5) { // 底部圆弧（占下半部分）
+                            const thetaU = Math.PI + u2 * Math.PI;
+                            x = Math.cos(thetaU) * 2.25;
+                            y = Math.sin(thetaU) * 2.5 - 1.5; // 弧形底拉低
+                        } else if (u1 < 0.75) { // 左立柱直线上升到顶部顶端
+                            x = -2.25; y = -1.5 + u2 * 5.5;
+                        } else { // 右立柱直线上升到顶部顶端
+                            x = 2.25; y = -1.5 + u2 * 5.5;
+                        }
+                        break;
+                }
+                
+                iloveu.push(x + xOffset, y, z);
+            }
+            modelsData['iloveu'] = iloveu;
+        }
+
+        // --- 3. 初始化 Three.js 三维渲染管线 ---
+        function initThree() {
+            const container = document.body;
+
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.012);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 28;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            container.appendChild(renderer.domElement);
+
+            generateShapes();
+
+            particleGeometry = new THREE.BufferGeometry();
+            const initialPositions = new Float32Array(modelsData[params.model]);
+            currentPositions = initialPositions.slice(); 
+            particleGeometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+
+            const createCircleTexture = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 16; canvas.height = 16;
+                const ctx = canvas.getContext('2d');
+                const gradient = ctx.createRadialGradient(8, 8, 0, 8, 8, 8);
+                gradient.addColorStop(0, 'rgba(255,255,255,1)');
+                gradient.addColorStop(0.3, 'rgba(255,255,255,0.8)');
+                gradient.addColorStop(1, 'rgba(255,255,255,0)');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, 16, 16);
+                return new THREE.CanvasTexture(canvas);
+            };
+
+            particleMaterial = new THREE.PointsMaterial({
+                color: new THREE.Color(params.color),
+                size: params.particleSize,
+                transparent: true,
+                blending: THREE.AdditiveBlending, 
+                depthWrite: false,
+                map: createCircleTexture()
+            });
+
+            particleSystem = new THREE.Points(particleGeometry, particleMaterial);
+            scene.add(particleSystem);
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // --- 4. 状态机平滑过渡动画算法 ---
+        function switchModel(modelName) {
+            if(currentActiveShape === modelName) return; 
+            currentActiveShape = modelName;
+            
+            const targetPositions = modelsData[modelName];
+            const posAttr = particleGeometry.attributes.position;
+            
+            gsap.to(currentPositions, {
+                endArray: targetPositions,
+                duration: 1.2,
+                ease: "power3.inOut",
+                onUpdate: () => {
+                    posAttr.needsUpdate = true; 
+                }
+            });
+        }
+
+        // --- 5. MediaPipe Hands 算法 ---
+        function initMediaPipe() {
+            const videoElement = document.getElementById('webcam');
+            const loadingElement = document.getElementById('loading');
+
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 1, 
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults(onHandResults);
+
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({ image: videoElement });
+                },
+                width: 320,
+                height: 240
+            });
+            
+            cameraUtils.start().then(() => {
+                loadingElement.style.opacity = 0;
+                setTimeout(() => loadingElement.remove(), 600);
+            });
+        }
+
+        function getDistance(p1, p2) {
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2) + Math.pow(p1.z - p2.z, 2));
+        }
+
+        function onHandResults(results) {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                return; 
+            }
+
+            const landmarks = results.multiHandLandmarks[0]; 
+
+            // 5.1 缩放与扩散算法
+            const wrist = landmarks[0];
+            const fingerTips = [4, 8, 12, 16, 20]; 
+            let totalDist = 0;
+            fingerTips.forEach(tip => {
+                totalDist += getDistance(landmarks[tip], wrist);
+            });
+            const avgDistance = totalDist / 5;
+
+            let scale = THREE.MathUtils.mapLinear(avgDistance, 0.24, 0.55, 0.3, 2.4);
+            scale = THREE.MathUtils.clamp(scale, 0.25, 3.0);
+            
+            gsap.to(particleSystem.scale, { x: scale, y: scale, z: scale, duration: 0.3, ease: "power1.out" });
+
+            // 5.2 旋转稳定跟踪算法 (Roll滤波)
+            const p1 = landmarks[2];  
+            const p2 = landmarks[17]; 
+            let targetAngleZ = Math.atan2(p2.y - p1.y, p2.x - p1.x) + Math.PI; 
+
+            gsap.to(particleSystem.rotation, { 
+                z: targetAngleZ * 0.75, 
+                duration: 0.6,         
+                ease: "power2.out" 
+            });
+
+            // 5.3 空间横向联动 (Yaw)
+            const handCenterX = landmarks[9].x; 
+            const targetAngleY = THREE.MathUtils.mapLinear(handCenterX, 0.15, 0.85, -0.6, 0.6);
+            gsap.to(particleSystem.rotation, {
+                y: targetAngleY,
+                duration: 0.7,
+                ease: "power2.out"
+            });
+
+            // 5.4 双指抓取检测
+            const pinchDist = getDistance(landmarks[4], landmarks[8]);
+            if(pinchDist < 0.055) { 
+                gsap.to(camera.position, { z: 16, duration: 0.6, ease: "power1.out" });
+            } else {
+                gsap.to(camera.position, { z: 28, duration: 0.6, ease: "power1.out" });
+            }
+            
+            // 5.5 烟花模式特异手势检测逻辑
+            if (params.model === '烟花') {
+                if (checkGesture1(landmarks)) {
+                    switchModel('iloveu');
+                } else {
+                    if(currentActiveShape === 'iloveu') {
+                        switchModel('烟花');
+                    }
+                }
+            }
+        }
+        
+        // 精准手势“1”判定：食指长伸，其它手指(包括大拇指)蜷缩
+        function checkGesture1(landmarks) {
+            const wrist = landmarks[0];
+            
+            const dThumb = getDistance(landmarks[4], wrist);
+            const dIndex = getDistance(landmarks[8], wrist);  
+            const dMiddle = getDistance(landmarks[12], wrist); 
+            const dRing = getDistance(landmarks[16], wrist);   
+            const dPinky = getDistance(landmarks[20], wrist);  
+            
+            const otherFingersAverage = (dThumb + dMiddle + dRing + dPinky) / 4;
+            
+            return dIndex > otherFingersAverage * 1.6;
+        }
+
+        // --- 6. GUI 面板 ---
+        function initUI() {
+            const gui = new lil.GUI({ title: '量子矩阵控制台' });
+            
+            gui.add(params, 'model', ['爱心', '花朵', '土星', '帽子', '烟花']).name('形态跃迁').onChange(value => {
+                switchModel(value);
+            });
+
+            gui.addColor(params, 'color').name('矩阵光谱').onChange(value => {
+                particleMaterial.color.set(value);
+            });
+
+            gui.add(params, 'particleSize', 0.02, 0.18, 0.01).name('粒子核径').onChange(value => {
+                particleMaterial.size = value;
+            });
+
+            gui.domElement.style.right = '20px';
+            gui.domElement.style.top = '20px';
+            gui.domElement.style.borderRadius = '8px';
+        }
+
+        // --- 7. 全屏控制 ---
+        function initFullscreen() {
+            const btn = document.getElementById('fullscreen-btn');
+            btn.addEventListener('click', () => {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().then(() => {
+                        btn.innerText = "退出全屏空间";
+                    });
+                } else {
+                    document.exitFullscreen().then(() => {
+                        btn.innerText = "全屏极客模式";
+                    });
+                }
+            });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- 8. 渲染循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        // --- 9. 系统主入口启动 ---
+        window.addEventListener('DOMContentLoaded', () => {
+            initThree();
+            initUI();
+            initFullscreen();
+            initMediaPipe();
+            animate();
+        });
+    </script>
+</body>
+</html>
